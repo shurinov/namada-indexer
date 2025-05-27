@@ -20,14 +20,15 @@ x-defaults: &defaults
 services:
   postgres:
     image: postgres:16-alpine
-    command: [ "postgres", "-c", "max_connections=200" ]
-    expose:
-      - "5432"
+    command: [ "postgres", "-c", "max_connections=200", "-p", "${PG_PORT}" ]
+    # expose:
+    #   - "5432"
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: namada-indexer
+      RUST_BACKTRACE: ${RUST_BACKTRACE}
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres -d namada-indexer" ]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d namada-indexer -p ${PG_PORT}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -39,13 +40,15 @@ services:
 
   dragonfly:
     image: docker.dragonflydb.io/dragonflydb/dragonfly
-    command: --logtostderr --cache_mode=true --port 6379 -dbnum 1
+    command: --logtostderr --cache_mode=true --port ${REDIS_PORT} -dbnum 1
     ulimits:
       memlock: -1
-    expose:
-      - "6379"
+    # expose:
+    #   - "6379"
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:${REDIS_PORT}"
     healthcheck:
-      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
+      test: [ "CMD-SHELL", "redis-cli -p ${REDIS_PORT} ping | grep PONG" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -109,8 +112,8 @@ services:
       <<: *build
       args:
         PACKAGE: webserver
-    expose:
-      - 5001
+    # expose:
+    #   - 5001
     ports:
       - ${WEBSERVER_HOST_IP:-127.0.0.1}:${WEBSERVER_PORT:-5001}:5001
     environment:
@@ -124,3 +127,5 @@ services:
 
 volumes:
   postgres-data:
+    external: true
+    name: ${PG_VOLUME}
