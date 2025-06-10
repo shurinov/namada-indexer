@@ -8,7 +8,8 @@ use chain::config::AppConfig;
 use chain::repository;
 use chain::services::namada::{
     query_all_balances, query_all_bonds_and_unbonds, query_all_proposals,
-    query_bonds, query_last_block_height, query_redelegations, query_tokens,
+    query_bonds, query_checksums, query_last_block_height, query_redelegations,
+    query_tokens,
 };
 use chain::services::{
     db as db_service, namada as namada_service,
@@ -17,10 +18,11 @@ use chain::services::{
 use chrono::{NaiveDateTime, Utc};
 use clap::Parser;
 use deadpool_diesel::postgres::Object;
-use futures::future::FutureExt;
+use diesel::RunQueryDsl;
 use futures::stream::StreamExt;
 use namada_sdk::time::DateTimeUtc;
 use orm::migrations::CustomMigrationSource;
+use orm::schema::{bonds, unbonds};
 use repository::pgf as namada_pgf_repository;
 use shared::balance::TokenSupply;
 use shared::block::Block;
@@ -39,6 +41,7 @@ use shared::validator::ValidatorSet;
 use tendermint_rpc::HttpClient;
 use tendermint_rpc::client::CompatMode;
 use tendermint_rpc::endpoint::block::Response as TendermintBlockResponse;
+use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
@@ -62,15 +65,7 @@ async fn main() -> Result<(), MainError> {
 
     tracing::info!("Network chain id: {}", chain_id);
 
-    let mut checksums = Checksums::default();
-    for code_path in Checksums::code_paths() {
-        let code = namada_service::query_tx_code_hash(&client, &code_path)
-            .await
-            .unwrap_or_else(|| {
-                panic!("{} must be defined in namada storage.", code_path)
-            });
-        checksums.add(code_path, code.to_lowercase());
-    }
+    let checksums = Arc::new(Mutex::new(query_checksums(&client).await));
 
     config.log.init();
 
@@ -181,12 +176,41 @@ async fn main() -> Result<(), MainError> {
 
     // Handle cases where we need to perform initial query
     let crawler_state = match crawler_state {
-        Some(state) => state,
+        Some(state) => {
+            if config.reindex_bonds {
+                let (bonds, unbonds) =
+                    query_all_bonds_and_unbonds(&client, None, None)
+                        .await
+                        .into_rpc_error()?;
+                conn.interact(move |conn| {
+                    diesel::delete(bonds::table).execute(conn)?;
+                    diesel::delete(unbonds::table).execute(conn)?;
+                    conn.build_transaction().read_write().run(
+                        |transaction_conn| {
+                            repository::pos::insert_bonds(
+                                transaction_conn,
+                                bonds,
+                            )?;
+                            repository::pos::insert_unbonds(
+                                transaction_conn,
+                                unbonds,
+                            )
+                        },
+                    )
+                })
+                .await
+                .context_db_interact_error()
+                .and_then(identity)
+                .into_db_error()?;
+            }
+            state
+        }
         None => {
+            let checksums = checksums.lock().await;
             initial_query(
                 &client,
                 &conn,
-                checksums.clone(),
+                &checksums,
                 config.initial_query_retry_time,
                 config.initial_query_retry_attempts,
             )
@@ -218,7 +242,7 @@ async fn crawling_fn(
     block_height: u32,
     client: Arc<HttpClient>,
     conn: Arc<Object>,
-    checksums: Checksums,
+    checksums: Arc<Mutex<Checksums>>,
     should_update_crawler_state: bool,
 ) -> Result<(), MainError> {
     let should_process = can_process(block_height, client.clone()).await?;
@@ -243,6 +267,15 @@ async fn crawling_fn(
             .await
             .into_rpc_error()?;
 
+    let mut checksums = checksums.lock().await;
+    // If we check like this we do not have to store last epoch in memory
+    let new_epoch = first_block_in_epoch.eq(&block_height);
+    // For new epochs, we need to query checksums in case they were changed due
+    // to proposal
+    if new_epoch {
+        *checksums = namada_service::query_checksums(&client).await;
+    }
+
     let native_token = namada_service::get_native_token(&client)
         .await
         .into_rpc_error()?;
@@ -250,10 +283,10 @@ async fn crawling_fn(
         native_token.clone().into();
 
     let (block, tm_block_response, epoch) =
-        get_block(block_height, &client, checksums, &native_token_address)
+        get_block(block_height, &client, &checksums, &native_token_address)
             .await?;
 
-    let rate_limits = first_block_in_epoch.eq(&block_height).then(|| {
+    let rate_limits = new_epoch.then(|| {
         let client = Arc::clone(&client);
 
         // start this series of queries in parallel, which take
@@ -287,13 +320,14 @@ async fn crawling_fn(
             native_token.clone(),
         ));
     let addresses = block.addresses_with_balance_change(&native_token);
+    let all_changed_tokens_supply = addresses
+        .iter()
+        .map(|bc| bc.token.clone())
+        .collect::<HashSet<_>>();
 
-    let token_supplies = first_block_in_epoch
-        .eq(&block_height)
-        .then(|| query_token_supplies(&client, &conn, &native_token, epoch))
-        .future()
-        .await
-        .transpose()?;
+    let token_supplies =
+        query_token_supplies(&client, &all_changed_tokens_supply, epoch)
+            .await?;
 
     let validators_addresses = if first_block_in_epoch.eq(&block_height) {
         let previous_epoch = epoch.saturating_sub(1);
@@ -492,7 +526,7 @@ async fn crawling_fn(
 
                 repository::balance::insert_token_supplies(
                     transaction_conn,
-                    token_supplies.into_iter().flatten(),
+                    token_supplies,
                 )?;
 
                 repository::balance::insert_ibc_rate_limits(
@@ -595,7 +629,7 @@ async fn crawling_fn(
 async fn initial_query(
     client: &HttpClient,
     conn: &Object,
-    checksums: Checksums,
+    checksums: &Checksums,
     retry_time: u64,
     retry_attempts: usize,
 ) -> Result<(), MainError> {
@@ -626,8 +660,7 @@ async fn try_initial_query(
             .into_rpc_error()?
             .into();
     let (block, tm_block_response, epoch) =
-        get_block(block_height, client, checksums.clone(), &native_token)
-            .await?;
+        get_block(block_height, client, &checksums, &native_token).await?;
 
     let tokens = query_tokens(client).await.into_rpc_error()?;
 
@@ -641,10 +674,12 @@ async fn try_initial_query(
         .into_rpc_error()
     };
     let token_supplies_fut = async {
-        let native_token = namada_service::get_native_token(client)
-            .await
-            .into_rpc_error()?;
-        query_token_supplies(client, conn, &native_token, epoch).await
+        query_token_supplies(
+            client,
+            &tokens.iter().cloned().collect::<HashSet<_>>(),
+            epoch,
+        )
+        .await
     };
 
     let (rate_limits, token_supplies) =
@@ -818,7 +853,7 @@ async fn update_crawler_timestamp(
 async fn get_block(
     block_height: u32,
     client: &HttpClient,
-    checksums: Checksums,
+    checksums: &Checksums,
     native_token: &namada_sdk::address::Address,
 ) -> Result<(Block, TendermintBlockResponse, u32), MainError> {
     tracing::debug!(block = block_height, "Query block...");
@@ -874,22 +909,31 @@ async fn get_block(
     Ok((block, tm_block_response, epoch))
 }
 
-async fn query_non_native_supplies(
+async fn query_token_supplies(
     client: &HttpClient,
-    conn: &Object,
+    tokens: &HashSet<Token>,
     epoch: u32,
 ) -> Result<Vec<TokenSupply>, MainError> {
-    let token_addresses = db_service::get_non_native_tokens(conn)
-        .await
-        .into_db_error()?;
+    let mut buffer = Vec::with_capacity(tokens.len());
 
-    let mut buffer = Vec::with_capacity(1);
-
-    let mut stream = futures::stream::iter(token_addresses)
-        .map(|address| async move {
-            namada_service::get_token_supply(client, address, epoch)
+    let mut stream = futures::stream::iter(tokens)
+        .map(|token| async move {
+            match token {
+                Token::Ibc(ibc_token) => namada_service::get_token_supply(
+                    client,
+                    ibc_token.address.to_string(),
+                    epoch,
+                )
                 .await
-                .into_rpc_error()
+                .into_rpc_error(),
+                Token::Native(address) => {
+                    namada_service::get_native_token_supply(
+                        client, address, epoch,
+                    )
+                    .await
+                    .into_rpc_error()
+                }
+            }
         })
         .buffer_unordered(32);
 
@@ -899,24 +943,4 @@ async fn query_non_native_supplies(
     }
 
     Ok(buffer)
-}
-
-async fn query_token_supplies(
-    client: &HttpClient,
-    conn: &Object,
-    native_token: &Id,
-    epoch: u32,
-) -> Result<Vec<TokenSupply>, MainError> {
-    let native_fut =
-        namada_service::get_native_token_supply(client, native_token, epoch)
-            .map(|result| result.into_rpc_error());
-
-    let non_native_fut = query_non_native_supplies(client, conn, epoch);
-
-    let (native, non_native) = futures::try_join!(native_fut, non_native_fut)?;
-
-    let mut supplies = non_native;
-    supplies.push(native);
-
-    Ok(supplies)
 }
