@@ -13,6 +13,7 @@ members = [
   "parameters",
   "transactions",
   "test_helpers",
+  "utilities"
 ]
 
 [workspace.package]
@@ -20,7 +21,7 @@ authors = ["Heliax <hello@heliax.dev>"]
 edition = "2024"
 license = "GPL-3.0"
 readme = "README.md"
-version = "3.1.0"
+version = "3.2.0"
 
 [workspace.dependencies]
 anyhow = "1.0.75"
