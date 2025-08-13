@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use shared::masp::MaspRewardData;
 
 use crate::entity::masp::{
     MaspPoolAggregate, MaspPoolAggregateKind, MaspPoolAggregateWindow,
@@ -56,6 +57,28 @@ impl From<MaspPoolAggregate> for MaspPoolAggregateResponse {
                 }
             },
             total_amount: value.total_amount.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaspRewardDataResponse {
+    pub address: String,
+    pub max_reward_rate: String,
+    pub kp_gain: String,
+    pub kd_gain: String,
+    pub locked_amount_target: String,
+}
+
+impl From<MaspRewardData> for MaspRewardDataResponse {
+    fn from(value: MaspRewardData) -> Self {
+        Self {
+            address: value.address.to_string(),
+            max_reward_rate: value.max_reward_rate.to_string(),
+            kp_gain: value.kp_gain.to_string(),
+            kd_gain: value.kd_gain.to_string(),
+            locked_amount_target: value.locked_amount_target.to_string(),
         }
     }
 }

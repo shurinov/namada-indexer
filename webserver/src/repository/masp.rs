@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SelectableHelper};
-use orm::masp::MaspPoolDb;
-use orm::schema::masp_pool_aggregate;
+use orm::masp::{MaspPoolDb, MaspRewardDataDb};
+use orm::schema::{masp_pool_aggregate, masp_rates};
 
 use crate::appstate::AppState;
 
@@ -15,6 +15,8 @@ pub trait MaspRepositoryTrait {
     fn new(app_state: AppState) -> Self;
 
     async fn find_all_aggregates(&self) -> Result<Vec<MaspPoolDb>, String>;
+
+    async fn find_all_rates(&self) -> Result<Vec<MaspRewardDataDb>, String>;
 
     async fn find_all_aggregates_by_token(
         &self,
@@ -34,6 +36,19 @@ impl MaspRepositoryTrait for MaspRepository {
         conn.interact(move |conn| {
             masp_pool_aggregate::table
                 .select(MaspPoolDb::as_select())
+                .load(conn)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn find_all_rates(&self) -> Result<Vec<MaspRewardDataDb>, String> {
+        let conn = self.app_state.get_db_connection().await;
+
+        conn.interact(move |conn| {
+            masp_rates::table
+                .select(MaspRewardDataDb::as_select())
                 .load(conn)
         })
         .await

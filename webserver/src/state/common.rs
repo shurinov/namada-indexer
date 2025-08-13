@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use namada_sdk::tendermint_rpc::HttpClient;
 
 use crate::appstate::AppState;
@@ -29,7 +31,7 @@ pub struct CommonState {
     pub crawler_state_service: CrawlerStateService,
     pub ibc_service: IbcService,
     pub masp_service: MaspService,
-    pub client: HttpClient,
+    pub client: Arc<HttpClient>,
     pub config: AppConfig,
 }
 
@@ -48,7 +50,7 @@ impl CommonState {
             crawler_state_service: CrawlerStateService::new(data.clone()),
             ibc_service: IbcService::new(data.clone()),
             masp_service: MaspService::new(data),
-            client,
+            client: Arc::new(client),
             config,
         }
     }
