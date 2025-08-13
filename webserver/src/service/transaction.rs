@@ -87,4 +87,26 @@ impl TransactionService {
             total_items as u64,
         ))
     }
+
+    pub async fn get_most_recent_transactions(
+        &self,
+        size: u64,
+    ) -> Result<Vec<WrapperTransaction>, TransactionError> {
+        let tokens = self
+            .chain_repo
+            .find_tokens()
+            .await
+            .map_err(TransactionError::Database)?;
+
+        let txs = self
+            .transaction_repo
+            .find_most_recent_transactions(size as i32)
+            .await
+            .map_err(TransactionError::Database)?;
+
+        Ok(txs
+            .into_iter()
+            .map(|w| WrapperTransaction::from_db(w, tokens.clone()))
+            .collect())
+    }
 }

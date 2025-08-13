@@ -32,3 +32,10 @@ impl TransactionIdParam {
         self.0.to_lowercase()
     }
 }
+
+#[derive(Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionMostRecentQueryParams {
+    #[validate(range(min = 10, max = 30))]
+    pub size: Option<u64>,
+}

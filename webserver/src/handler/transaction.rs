@@ -6,6 +6,7 @@ use axum_macros::debug_handler;
 
 use crate::dto::transaction::{
     TransactionHistoryQueryParams, TransactionIdParam,
+    TransactionMostRecentQueryParams,
 };
 use crate::error::api::ApiError;
 use crate::error::transaction::TransactionError;
@@ -91,4 +92,40 @@ pub async fn get_transaction_history(
         total_pages,
         total_items,
     )))
+}
+
+#[debug_handler]
+pub async fn get_most_recent_transactions(
+    _headers: HeaderMap,
+    Query(query): Query<TransactionMostRecentQueryParams>,
+    State(state): State<CommonState>,
+) -> Result<Json<Vec<WrapperTransactionResponse>>, ApiError> {
+    let size = query.size.unwrap_or(10);
+
+    let transactions = state
+        .transaction_service
+        .get_most_recent_transactions(size)
+        .await?;
+
+    let inner_txs = transactions
+        .iter()
+        .map(|tx| {
+            state
+                .transaction_service
+                .get_inner_tx_by_wrapper_id(tx.id.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let inner_txs = futures::future::join_all(inner_txs).await;
+
+    let response = transactions
+        .into_iter()
+        .zip(inner_txs.into_iter())
+        .map(|(tx, inner_tx_result)| {
+            let inner_txs = inner_tx_result.unwrap_or_default();
+            WrapperTransactionResponse::new(tx, inner_txs)
+        })
+        .collect();
+
+    Ok(Json(response))
 }

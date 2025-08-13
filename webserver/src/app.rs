@@ -123,6 +123,10 @@ impl ApplicationServer {
                     get(transaction_handlers::get_wrapper_tx),
                 )
                 .route(
+                    "/chain/wrapper/recent",
+                    get(transaction_handlers::get_most_recent_transactions),
+                )
+                .route(
                     "/chain/inner/{id}",
                     get(transaction_handlers::get_inner_tx),
                 )
