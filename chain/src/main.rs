@@ -327,7 +327,8 @@ async fn crawling_fn(
         namada_service::query_native_addresses_balance_change(Token::Native(
             native_token.clone(),
         ));
-    let addresses = block.addresses_with_balance_change(&native_token);
+    let addresses =
+        block.addresses_with_balance_change(&native_token, &ibc_tokens);
     let all_changed_tokens_supply = addresses
         .iter()
         .map(|bc| bc.token.clone())
