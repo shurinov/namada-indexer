@@ -603,6 +603,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MaspPoolAggregateResponse"
+  /api/v1/masp/rates:
+    get:
+      summary: Get masp rates
+      responses:
+        "200":
+          description: Get the masp rates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MaspRatesResponse"
   /api/v1/gas-price:
     get:
       summary: Get all the gas prices
@@ -1280,6 +1292,18 @@ components:
           type: string
           enum: [inflows, outflows]
         totalAmount:
+          type: string
+    MaspRatesResponse:
+      type: object
+      required: [address, kp_gain, kd_gain, locked_amount_target]
+      properties:
+        address:
+          type: string
+        kp_gain:
+          type: string
+        kd_gain:
+          type: string
+        locked_amount_target:
           type: string
     Pagination:
       type: object
