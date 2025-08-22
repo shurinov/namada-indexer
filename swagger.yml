@@ -845,7 +845,7 @@ paths:
                 type: object
                 required: [block]
                 properties:
-                 block:
+                  block:
                     type: string
   /api/v1/chain/epoch/latest:
     get:
@@ -1436,7 +1436,7 @@ components:
       type: object
       required:
         [
-          txId,
+          id,
           feePayer,
           feeToken,
           gasLimit,
@@ -1452,8 +1452,8 @@ components:
           type: string
         feeToken:
           oneOf:
-              - $ref: "#/components/schemas/NativeToken"
-              - $ref: "#/components/schemas/IbcToken"
+            - $ref: "#/components/schemas/NativeToken"
+            - $ref: "#/components/schemas/IbcToken"
         gasLimit:
           type: number
         amountPerGasUnit:
@@ -1469,7 +1469,7 @@ components:
           type: array
           items:
             type: object
-            required: [txId, kind, exitCode]
+            required: [id, kind, exitCode]
             properties:
               id:
                 type: string
@@ -1510,7 +1510,7 @@ components:
           type: boolean
     InnerTransaction:
       type: object
-      required: [txId, kind, wrapperId, exitCode]
+      required: [id, kind, wrapperId, exitCode]
       properties:
         id:
           type: string
@@ -1569,7 +1569,7 @@ components:
           type: string
     TransactionHistory:
       type: object
-      required: [txId, kind, wrapperId, exitCode]
+      required: [id, kind, wrapperId, exitCode]
       properties:
         tx:
           type: object
