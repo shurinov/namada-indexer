@@ -363,6 +363,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    masp_rates (token) {
+        token -> Varchar,
+        max_reward_rate -> Varchar,
+        kp_gain -> Varchar,
+        kd_gain -> Varchar,
+        locked_amount_target -> Numeric,
+    }
+}
+
+diesel::table! {
     pos_rewards (id) {
         id -> Int4,
         owner -> Varchar,
@@ -525,6 +535,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     inner_transactions,
     masp_pool,
     masp_pool_aggregate,
+    masp_rates,
     pos_rewards,
     public_good_funding,
     redelegation,

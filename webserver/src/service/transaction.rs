@@ -1,23 +1,24 @@
-use orm::transactions::WrapperTransactionDb;
-
 use crate::appstate::AppState;
-use crate::error::transaction::TransactionError;
-use crate::repository::tranasaction::{
-    TransactionRepository, TransactionRepositoryTrait,
-};
-use crate::response::transaction::{
+use crate::entity::transaction::{
     InnerTransaction, TransactionHistory, WrapperTransaction,
+};
+use crate::error::transaction::TransactionError;
+use crate::repository::chain::{ChainRepository, ChainRepositoryTrait};
+use crate::repository::transaction::{
+    TransactionRepository, TransactionRepositoryTrait,
 };
 
 #[derive(Clone)]
 pub struct TransactionService {
     pub transaction_repo: TransactionRepository,
+    pub chain_repo: ChainRepository,
 }
 
 impl TransactionService {
     pub fn new(app_state: AppState) -> Self {
         Self {
-            transaction_repo: TransactionRepository::new(app_state),
+            transaction_repo: TransactionRepository::new(app_state.clone()),
+            chain_repo: ChainRepository::new(app_state),
         }
     }
 
@@ -25,28 +26,20 @@ impl TransactionService {
         &self,
         id: String,
     ) -> Result<Option<WrapperTransaction>, TransactionError> {
+        let tokens = self
+            .chain_repo
+            .find_tokens()
+            .await
+            .map_err(TransactionError::Database)?;
+
         let wrapper_tx = self
             .transaction_repo
             .find_wrapper_tx(id)
             .await
             .map_err(TransactionError::Database)?;
 
-        let masp_fee_payment = if let Some(WrapperTransactionDb {
-            masp_fee_payment: Some(masp_fee_payment),
-            ..
-        }) = &wrapper_tx
-        {
-            self.get_inner_tx(masp_fee_payment.to_owned()).await?
-        } else {
-            None
-        };
-
-        Ok(wrapper_tx.map(|wrapper_tx| {
-            let mut wrapper = WrapperTransaction::from(wrapper_tx);
-            wrapper.masp_fee_payment =
-                masp_fee_payment.map(|inner| inner.to_short());
-            wrapper
-        }))
+        Ok(wrapper_tx
+            .map(|wrapper| WrapperTransaction::from_db(wrapper, tokens)))
     }
 
     pub async fn get_inner_tx(
@@ -88,10 +81,32 @@ impl TransactionService {
 
         Ok((
             txs.into_iter()
-                .map(|(h, t, bh)| TransactionHistory::from(h, t, bh))
+                .map(|(h, t, bh)| TransactionHistory::from_db(h, t, bh))
                 .collect(),
             total_pages as u64,
             total_items as u64,
         ))
+    }
+
+    pub async fn get_most_recent_transactions(
+        &self,
+        size: u64,
+    ) -> Result<Vec<WrapperTransaction>, TransactionError> {
+        let tokens = self
+            .chain_repo
+            .find_tokens()
+            .await
+            .map_err(TransactionError::Database)?;
+
+        let txs = self
+            .transaction_repo
+            .find_most_recent_transactions(size as i32)
+            .await
+            .map_err(TransactionError::Database)?;
+
+        Ok(txs
+            .into_iter()
+            .map(|w| WrapperTransaction::from_db(w, tokens.clone()))
+            .collect())
     }
 }

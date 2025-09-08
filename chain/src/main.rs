@@ -302,6 +302,14 @@ async fn crawling_fn(
         })
     });
 
+    let masp_reward_rates = if new_epoch {
+        namada_service::get_masp_rates(&client)
+            .await
+            .into_rpc_error()?
+    } else {
+        vec![]
+    };
+
     tracing::info!(
         block = block_height,
         txs = block.transactions.len(),
@@ -319,7 +327,8 @@ async fn crawling_fn(
         namada_service::query_native_addresses_balance_change(Token::Native(
             native_token.clone(),
         ));
-    let addresses = block.addresses_with_balance_change(&native_token);
+    let addresses =
+        block.addresses_with_balance_change(&native_token, &ibc_tokens);
     let all_changed_tokens_supply = addresses
         .iter()
         .map(|bc| bc.token.clone())
@@ -597,6 +606,11 @@ async fn crawling_fn(
                     revealed_pks,
                 )?;
 
+                repository::masp::insert_masp_rates(
+                    transaction_conn,
+                    masp_reward_rates,
+                )?;
+
                 if should_update_crawler_state {
                     repository::crawler_state::upsert_crawler_state(
                         transaction_conn,
@@ -742,6 +756,10 @@ async fn try_initial_query(
     .await
     .into_rpc_error()?;
 
+    let masp_reward_rates = namada_service::get_masp_rates(client)
+        .await
+        .into_rpc_error()?;
+
     let timestamp = DateTimeUtc::now().0.timestamp();
 
     let crawler_state = ChainCrawlerState {
@@ -805,6 +823,11 @@ async fn try_initial_query(
                 repository::pos::insert_redelegations(
                     transaction_conn,
                     redelegations,
+                )?;
+
+                repository::masp::insert_masp_rates(
+                    transaction_conn,
+                    masp_reward_rates,
                 )?;
 
                 repository::crawler_state::upsert_crawler_state(

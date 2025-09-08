@@ -2,9 +2,9 @@ use std::str::FromStr;
 
 use bigdecimal::BigDecimal;
 use diesel::{Insertable, Queryable, Selectable};
-use shared::masp::{MaspEntry, MaspEntryDirection};
+use shared::masp::{MaspEntry, MaspEntryDirection, MaspRewardData};
 
-use crate::schema::{masp_pool, masp_pool_aggregate};
+use crate::schema::{masp_pool, masp_pool_aggregate, masp_rates};
 
 #[derive(Debug, Clone, diesel_derive_enum::DbEnum)]
 #[ExistingTypePath = "crate::schema::sql_types::MaspPoolDirection"]
@@ -71,6 +71,34 @@ impl From<MaspEntry> for MaspInsertDb {
                 MaspEntryDirection::Out => MaspPoolDirectionDb::Out,
             },
             inner_tx_id: value.inner_tx_id.to_string(),
+        }
+    }
+}
+
+#[derive(Insertable, Clone, Queryable, Selectable, Debug)]
+#[diesel(table_name = masp_rates)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct MaspRewardDataDb {
+    pub token: String,
+    pub max_reward_rate: String,
+    pub kp_gain: String,
+    pub kd_gain: String,
+    pub locked_amount_target: BigDecimal,
+}
+
+pub type MaspRewardDataInsertDb = MaspRewardDataDb;
+
+impl From<MaspRewardData> for MaspRewardDataInsertDb {
+    fn from(value: MaspRewardData) -> Self {
+        MaspRewardDataInsertDb {
+            token: value.address.to_string(),
+            max_reward_rate: value.max_reward_rate.to_string(),
+            kp_gain: value.kp_gain.to_string(),
+            kd_gain: value.kd_gain.to_string(),
+            locked_amount_target: BigDecimal::from_str(
+                &value.locked_amount_target.to_string(),
+            )
+            .expect("Invalid locked amount target"),
         }
     }
 }

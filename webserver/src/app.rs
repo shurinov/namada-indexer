@@ -85,10 +85,6 @@ impl ApplicationServer {
                     get(gov_handlers::get_governance_proposals),
                 )
                 .route(
-                    "/gov/proposal/all",
-                    get(gov_handlers::get_all_governance_proposals),
-                )
-                .route(
                     "/gov/proposal/{id}",
                     get(gov_handlers::get_governance_proposal_by_id),
                 )
@@ -125,6 +121,10 @@ impl ApplicationServer {
                 .route(
                     "/chain/wrapper/{id}",
                     get(transaction_handlers::get_wrapper_tx),
+                )
+                .route(
+                    "/chain/wrapper/recent",
+                    get(transaction_handlers::get_most_recent_transactions),
                 )
                 .route(
                     "/chain/inner/{id}",
@@ -167,11 +167,7 @@ impl ApplicationServer {
                     get(ibc_handler::get_ibc_token_throughput),
                 )
                 .route(
-                    "/pgf/payments",
-                    get(pgf_service::get_pgf_continuous_payments),
-                )
-                .route(
-                    "/pgf/paymenents/{proposal_id}",
+                    "/pgf/payments/{proposal_id}",
                     get(pgf_service::get_pgf_payment_by_proposal_id),
                 )
                 .route(
@@ -195,6 +191,10 @@ impl ApplicationServer {
                 .route(
                     "/masp/aggregates",
                     get(masp_handlers::get_masp_aggregates),
+                )
+                .route(
+                    "/masp/rates",
+                    get(masp_handlers::get_masp_rates),
                 )
                 .route(
                     "/metrics",
