@@ -1,7 +1,11 @@
 use anyhow::Context;
 use clap::Parser;
+use mimalloc::MiMalloc;
 use webserver::app::ApplicationServer;
 use webserver::config::AppConfig;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

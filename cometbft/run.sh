@@ -1,4 +1,4 @@
 . ../.env
 export TENDERMINT_URL
 export DATABASE_URL
-cargo run -- --cargo-env development
+cargo run --release 

@@ -15,3 +15,12 @@ pub struct MaspEntry {
     pub direction: MaspEntryDirection,
     pub inner_tx_id: Id,
 }
+
+#[derive(Debug, Clone)]
+pub struct MaspRewardData {
+    pub address: Id,
+    pub max_reward_rate: String,
+    pub kp_gain: String,
+    pub kd_gain: String,
+    pub locked_amount_target: Amount,
+}

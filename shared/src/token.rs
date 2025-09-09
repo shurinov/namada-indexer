@@ -41,6 +41,13 @@ impl Token {
             Token::Native(Id::Account(token.to_string()))
         }
     }
+
+    pub fn address(&self) -> &Id {
+        match self {
+            Token::Ibc(token) => &token.address,
+            Token::Native(token) => token,
+        }
+    }
 }
 
 #[derive(Debug)]
