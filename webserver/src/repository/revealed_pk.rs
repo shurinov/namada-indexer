@@ -1,4 +1,4 @@
-use axum::async_trait;
+use async_trait::async_trait;
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl, SelectableHelper};
 use orm::revealed_pk::{RevealedPkDb, RevealedPkInsertDb};
 use orm::schema::revealed_pk;

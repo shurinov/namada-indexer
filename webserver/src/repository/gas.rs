@@ -1,4 +1,4 @@
-use axum::async_trait;
+use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use diesel::dsl::{avg, count, max, min};
 use diesel::sql_types::{BigInt, Integer, Nullable, Numeric};

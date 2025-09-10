@@ -11,19 +11,21 @@ use orm::migrations::CustomMigrationSource;
 use shared::block::Block;
 use shared::block_result::BlockResult;
 use shared::checksums::Checksums;
+use shared::client::Client;
+use shared::cometbft::CometbftBlock;
 use shared::crawler::crawl;
 use shared::crawler_state::BlockCrawlerState;
 use shared::error::{AsDbError, AsRpcError, ContextDbInteractError, MainError};
 use shared::id::Id;
 use shared::transaction::{IbcTokenAction, IbcTokenFlow};
 use tendermint_rpc::HttpClient;
-use tendermint_rpc::client::CompatMode;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use transactions::app_state::AppState;
 use transactions::config::AppConfig;
 use transactions::repository::{
-    block as block_repo, masp as masp_repo, transactions as transaction_repo,
+    block as block_repo, cometbft as cometbft_repo, masp as masp_repo,
+    transactions as transaction_repo,
 };
 use transactions::services::namada::query_checksums;
 use transactions::services::{
@@ -37,14 +39,9 @@ async fn main() -> Result<(), MainError> {
 
     config.log.init();
 
-    let client = Arc::new(
-        HttpClient::builder(config.tendermint_url.as_str().parse().unwrap())
-            .compat_mode(CompatMode::V0_37)
-            .build()
-            .unwrap(),
-    );
+    let client = Client::new(&config.tendermint_url);
 
-    let chain_id = tendermint_service::query_status(&client)
+    let chain_id = tendermint_service::query_status(client.as_ref())
         .await
         .into_rpc_error()?
         .node_info
@@ -53,7 +50,8 @@ async fn main() -> Result<(), MainError> {
 
     tracing::info!("Network chain id: {}", chain_id);
 
-    let checksums = Arc::new(Mutex::new(query_checksums(&client).await));
+    let checksums =
+        Arc::new(Mutex::new(query_checksums(client.as_ref()).await));
 
     let app_state = AppState::new(config.database_url).into_db_error()?;
     let conn = Arc::new(app_state.get_db_connection().await.into_db_error()?);
@@ -79,13 +77,20 @@ async fn main() -> Result<(), MainError> {
         ),
     };
 
+    let native_token: namada_sdk::address::Address =
+        namada_service::get_native_token(client.as_ref())
+            .await
+            .into_rpc_error()?
+            .into();
+
     crawl(
         move |block_height| {
             crawling_fn(
                 block_height,
-                client.clone(),
+                Arc::new(client.get()),
                 conn.clone(),
                 checksums.clone(),
+                native_token.clone(),
                 config.backfill_from.is_none(),
             )
         },
@@ -100,6 +105,7 @@ async fn crawling_fn(
     client: Arc<HttpClient>,
     conn: Arc<Object>,
     checksums: Arc<Mutex<Checksums>>,
+    native_token: namada_sdk::address::Address,
     should_update_crawler_state: bool,
 ) -> Result<(), MainError> {
     let should_process = can_process(block_height, client.clone()).await?;
@@ -118,25 +124,19 @@ async fn crawling_fn(
 
     let start = Instant::now();
 
-    tracing::debug!(block = block_height, "Query block...");
-    let tm_block_response =
-        tendermint_service::query_raw_block_at_height(&client, block_height)
+    let cometbft_block =
+        get_cometbft_block_with_fallback(&conn, &client, block_height)
             .await
-            .into_rpc_error()?;
+            .into_db_error()?;
+
+    let tm_block_response = cometbft_block.block;
     tracing::debug!(
         block = block_height,
         "Raw block contains {} txs...",
         tm_block_response.block.data.len()
     );
 
-    tracing::debug!(block = block_height, "Query block results...");
-    let tm_block_results_response =
-        tendermint_service::query_raw_block_results_at_height(
-            &client,
-            block_height,
-        )
-        .await
-        .into_rpc_error()?;
+    let tm_block_results_response = cometbft_block.events;
     let block_results = BlockResult::from(tm_block_results_response);
 
     let proposer_address_namada = namada_service::get_validator_namada_address(
@@ -152,17 +152,6 @@ async fn crawling_fn(
         namada_address = ?proposer_address_namada,
         "Got block proposer address"
     );
-
-    let native_token: namada_sdk::address::Address =
-        namada_service::get_native_token(&client)
-            .await
-            .into_rpc_error()?
-            .into();
-
-    let epoch =
-        namada_service::get_epoch_at_block_height(&client, block_height)
-            .await
-            .into_rpc_error()?;
 
     let first_block_in_epoch =
         namada_service::get_first_block_in_epoch(&client)
@@ -183,7 +172,7 @@ async fn crawling_fn(
         &block_results,
         &proposer_address_namada,
         &checksums,
-        epoch,
+        cometbft_block.epoch,
         block_height,
         &native_token,
     );
@@ -199,16 +188,11 @@ async fn crawling_fn(
     let ibc_ack_packet = tx_service::get_ibc_ack_packet(&inner_txs);
 
     let ibc_token_flows = {
-        let epoch =
-            namada_service::get_epoch_at_block_height(&client, block_height)
-                .await
-                .into_rpc_error()?;
-
         let mut flows_map = HashMap::new();
 
         tx_service::get_ibc_token_flows(&block_results).for_each(
             |(action, token, amount)| {
-                let key = (token.clone(), epoch);
+                let key = (token.clone(), cometbft_block.epoch);
                 let entry = flows_map
                     .entry(key)
                     .or_insert((BigDecimal::zero(), BigDecimal::zero()));
@@ -364,4 +348,47 @@ async fn update_crawler_timestamp(
     .into_db_error()?
     .context("Insert crawler state error")
     .into_db_error()
+}
+
+pub async fn get_cometbft_block_with_fallback(
+    conn: &Object,
+    client: &HttpClient,
+    block_height: u32,
+) -> anyhow::Result<CometbftBlock> {
+    let block = cometbft_repo::get_block(conn, block_height)
+        .await
+        .context("Failed to get block")?;
+
+    let block = match block {
+        Some(block) => block,
+        None => {
+            let block = tendermint_service::query_raw_block_at_height(
+                client,
+                block_height,
+            )
+            .await
+            .context("Failed to query block")?;
+
+            let events = tendermint_service::query_raw_block_results_at_height(
+                client,
+                block_height,
+            )
+            .await
+            .context("Failed to query block results")?;
+
+            let epoch =
+                namada_service::get_epoch_at_block_height(client, block_height)
+                    .await
+                    .context("Failed to query epoch")?;
+
+            CometbftBlock {
+                block_height,
+                block,
+                events,
+                epoch,
+            }
+        }
+    };
+
+    Ok(block)
 }

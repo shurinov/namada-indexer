@@ -186,6 +186,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    cometbft_block (id) {
+        id -> Int4,
+        encoded_block -> Varchar,
+        encoded_block_result -> Varchar,
+        epoch -> Int4,
+    }
+}
+
+diesel::table! {
     use diesel::sql_types::*;
     use super::sql_types::CrawlerName;
 
@@ -354,6 +363,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    masp_rates (token) {
+        token -> Varchar,
+        max_reward_rate -> Varchar,
+        kp_gain -> Varchar,
+        kd_gain -> Varchar,
+        locked_amount_target -> Numeric,
+    }
+}
+
+diesel::table! {
     pos_rewards (id) {
         id -> Int4,
         owner -> Varchar,
@@ -503,6 +522,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     blocks,
     bonds,
     chain_parameters,
+    cometbft_block,
     crawler_state,
     gas_estimations,
     gas_price,
@@ -515,6 +535,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     inner_transactions,
     masp_pool,
     masp_pool_aggregate,
+    masp_rates,
     pos_rewards,
     public_good_funding,
     redelegation,

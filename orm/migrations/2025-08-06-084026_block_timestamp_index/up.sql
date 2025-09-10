@@ -1,0 +1,1 @@
+CREATE INDEX idx_block_timestamp ON blocks(timestamp);

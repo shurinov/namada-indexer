@@ -8,9 +8,8 @@ use axum::routing::get;
 use axum::{BoxError, Json, Router};
 use axum_prometheus::PrometheusMetricLayer;
 use lazy_static::lazy_static;
-use namada_sdk::tendermint_rpc::HttpClient;
-use namada_sdk::tendermint_rpc::client::CompatMode;
 use serde_json::json;
+use shared::client::Client;
 use tower::ServiceBuilder;
 use tower::buffer::BufferLayer;
 use tower::limit::RateLimitLayer;
@@ -43,16 +42,14 @@ impl ApplicationServer {
         let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
         let app_state = AppState::new(db_url, cache_url);
-        let client = HttpClient::builder(
-            config.tendermint_url.as_str().parse().unwrap(),
-        )
-        .compat_mode(CompatMode::V0_37)
-        .build()
-        .unwrap();
+        let client = Client::new(&config.tendermint_url);
 
         let routes = {
-            let common_state =
-                CommonState::new(client, config.clone(), app_state.clone());
+            let common_state = CommonState::new(
+                client.get(),
+                config.clone(),
+                app_state.clone(),
+            );
 
             Router::new()
                 .route("/pos/validator", get(pos_handlers::get_validators))
@@ -60,23 +57,23 @@ impl ApplicationServer {
                     "/pos/validator/all",
                     get(pos_handlers::get_all_validators),
                 )
-                .route("/pos/bond/:address", get(pos_handlers::get_bonds))
+                .route("/pos/bond/{address}", get(pos_handlers::get_bonds))
                 .route(
-                    "/pos/merged-bonds/:address",
+                    "/pos/merged-bonds/{address}",
                     get(pos_handlers::get_merged_bonds),
                 )
-                .route("/pos/unbond/:address", get(pos_handlers::get_unbonds))
+                .route("/pos/unbond/{address}", get(pos_handlers::get_unbonds))
                 .route(
-                    "/pos/merged-unbonds/:address",
+                    "/pos/merged-unbonds/{address}",
                     get(pos_handlers::get_merged_unbonds),
                 )
                 .route(
-                    "/pos/withdraw/:address",
+                    "/pos/withdraw/{address}",
                     get(pos_handlers::get_withdraws),
                 )
-                .route("/pos/reward/:address", get(pos_handlers::get_rewards))
+                .route("/pos/reward/{address}", get(pos_handlers::get_rewards))
                 .route(
-                    "/pos/reward/:delegator/:validator/:epoch",
+                    "/pos/reward/{delegator}/{validator}/{epoch}",
                     get(pos_handlers::get_rewards_by_delegator_and_validator_and_epoch),
                 )
                 .route(
@@ -88,49 +85,49 @@ impl ApplicationServer {
                     get(gov_handlers::get_governance_proposals),
                 )
                 .route(
-                    "/gov/proposal/all",
-                    get(gov_handlers::get_all_governance_proposals),
-                )
-                .route(
-                    "/gov/proposal/:id",
+                    "/gov/proposal/{id}",
                     get(gov_handlers::get_governance_proposal_by_id),
                 )
                 .route(
-                    "/gov/proposal/:id/data",
+                    "/gov/proposal/{id}/data",
                     get(gov_handlers::get_proposal_data_by_proposal_id),
                 )
                 .route(
-                    "/gov/proposal/:id/votes",
+                    "/gov/proposal/{id}/votes",
                     get(gov_handlers::get_governance_proposal_votes),
                 )
                 .route(
-                    "/gov/proposal/:id/votes/:address",
+                    "/gov/proposal/{id}/votes/{address}",
                     get(gov_handlers::get_governance_proposal_votes_by_address),
                 )
                 .route(
-                    "/gov/voter/:address/votes",
+                    "/gov/voter/{address}/votes",
                     get(gov_handlers::get_governance_proposal_votes_by_voter),
                 )
                 .route(
-                    "/account/:address",
+                    "/account/{address}",
                     get(balance_handlers::get_address_balance),
                 )
                 .route(
-                    "/revealed-public-key/:address",
+                    "/revealed-public-key/{address}",
                     get(pk_handlers::get_revealed_pk),
                 )
                 .route("/gas/estimate", get(gas_handlers::get_gas_estimate))
                 .route(
-                    "/gas-price/:token",
+                    "/gas-price/{token}",
                     get(gas_handlers::get_gas_price_by_token),
                 )
                 .route("/gas-price", get(gas_handlers::get_all_gas_prices))
                 .route(
-                    "/chain/wrapper/:id",
+                    "/chain/wrapper/{id}",
                     get(transaction_handlers::get_wrapper_tx),
                 )
                 .route(
-                    "/chain/inner/:id",
+                    "/chain/wrapper/recent",
+                    get(transaction_handlers::get_most_recent_transactions),
+                )
+                .route(
+                    "/chain/inner/{id}",
                     get(transaction_handlers::get_inner_tx),
                 )
                 .route(
@@ -156,7 +153,7 @@ impl ApplicationServer {
                     "/chain/epoch/latest",
                     get(chain_handlers::get_last_processed_epoch),
                 )
-                .route("/ibc/:tx_id/status", get(ibc_handler::get_ibc_status))
+                .route("/ibc/{tx_id}/status", get(ibc_handler::get_ibc_status))
                 .route(
                     "/ibc/rate-limits",
                     get(ibc_handler::get_ibc_rate_limits),
@@ -166,15 +163,11 @@ impl ApplicationServer {
                     get(ibc_handler::get_ibc_token_flows),
                 )
                 .route(
-                    "/ibc/token-throughput/:token",
+                    "/ibc/token-throughput/{token}",
                     get(ibc_handler::get_ibc_token_throughput),
                 )
                 .route(
-                    "/pgf/payments",
-                    get(pgf_service::get_pgf_continuous_payments),
-                )
-                .route(
-                    "/pgf/paymenents/:proposal_id",
+                    "/pgf/payments/{proposal_id}",
                     get(pgf_service::get_pgf_payment_by_proposal_id),
                 )
                 .route(
@@ -184,16 +177,24 @@ impl ApplicationServer {
                 // Server sent events endpoints
                 .route("/chain/status", get(chain_handlers::chain_status))
                 .route(
-                    "/block/height/:value",
+                    "/block/height/{value}",
                     get(block_handlers::get_block_by_height),
                 )
                 .route(
-                    "/block/timestamp/:value",
+                    "/block/timestamp/{value}",
                     get(block_handlers::get_block_by_timestamp),
+                )
+                .route(
+                    "/block/hash/{value}",
+                    get(block_handlers::get_block_by_hash),
                 )
                 .route(
                     "/masp/aggregates",
                     get(masp_handlers::get_masp_aggregates),
+                )
+                .route(
+                    "/masp/rates",
+                    get(masp_handlers::get_masp_rates),
                 )
                 .route(
                     "/metrics",

@@ -1,6 +1,6 @@
 [package]
-name = "seeder"
-description = "Database seeder."
+name = "cometbft"
+description = "Namada cometbft crawler."
 resolver = "2"
 authors.workspace = true
 edition.workspace = true
@@ -9,19 +9,33 @@ readme.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "seeder"
+name = "cometbft"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 deadpool-diesel.workspace = true
 diesel.workspace = true
+futures.workspace = true
+namada_core.workspace = true
+namada_governance.workspace = true
+namada_sdk.workspace = true
+namada_token.workspace = true
 orm.workspace = true
-rand.workspace = true
+rlimit.workspace = true
+serde_json.workspace = true
 shared.workspace = true
+subtle-encoding.workspace = true
+tendermint-rpc.workspace = true
 tokio.workspace = true
+tokio-retry.workspace = true
 tracing.workspace = true
+itertools.workspace = true
 
 [build-dependencies]
 vergen = { workspace = true, features = ["build", "git", "gitcl"] }
+
+[dev-dependencies]
+test_helpers.workspace = true

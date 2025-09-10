@@ -4,11 +4,15 @@ use axum::http::HeaderMap;
 use axum_extra::extract::Query;
 use axum_macros::debug_handler;
 
-use crate::dto::transaction::TransactionHistoryQueryParams;
+use crate::dto::transaction::{
+    TransactionHistoryQueryParams, TransactionIdParam,
+    TransactionMostRecentQueryParams,
+};
 use crate::error::api::ApiError;
 use crate::error::transaction::TransactionError;
 use crate::response::transaction::{
-    InnerTransaction, TransactionHistory, WrapperTransaction,
+    InnerTransactionResponse, TransactionHistoryResponse,
+    WrapperTransactionResponse,
 };
 use crate::response::utils::PaginatedResponse;
 use crate::state::common::CommonState;
@@ -16,11 +20,12 @@ use crate::state::common::CommonState;
 #[debug_handler]
 pub async fn get_wrapper_tx(
     _headers: HeaderMap,
-    Path(tx_id): Path<String>,
+    Path(tx_id): Path<TransactionIdParam>,
     State(state): State<CommonState>,
-) -> Result<Json<Option<WrapperTransaction>>, ApiError> {
-    is_valid_hash(&tx_id)?;
-    let tx_id = tx_id.to_lowercase();
+) -> Result<Json<Option<WrapperTransactionResponse>>, ApiError> {
+    tx_id.is_valid_hash()?;
+
+    let tx_id = tx_id.get();
 
     let wrapper_tx = state
         .transaction_service
@@ -36,32 +41,30 @@ pub async fn get_wrapper_tx(
         .get_inner_tx_by_wrapper_id(tx_id)
         .await?;
 
-    Ok(Json(wrapper_tx.map(|mut wrapper| {
-        wrapper.inner_transactions =
-            inner_txs.into_iter().map(|tx| tx.to_short()).collect();
-        wrapper
-    })))
+    let response = wrapper_tx
+        .map(|wrapper| WrapperTransactionResponse::new(wrapper, inner_txs));
+
+    Ok(Json(response))
 }
 
 #[debug_handler]
 pub async fn get_inner_tx(
     _headers: HeaderMap,
-    Path(tx_id): Path<String>,
+    Path(tx_id): Path<TransactionIdParam>,
     State(state): State<CommonState>,
-) -> Result<Json<Option<InnerTransaction>>, ApiError> {
-    is_valid_hash(&tx_id)?;
-    let tx_id = tx_id.to_lowercase();
+) -> Result<Json<Option<InnerTransactionResponse>>, ApiError> {
+    tx_id.is_valid_hash()?;
+
+    let tx_id = tx_id.get();
 
     let inner_tx = state
         .transaction_service
         .get_inner_tx(tx_id.clone())
         .await?;
 
-    if inner_tx.is_none() {
-        return Err(TransactionError::TxIdNotFound(tx_id).into());
-    }
+    let response = inner_tx.map(InnerTransactionResponse::new);
 
-    Ok(Json(inner_tx))
+    Ok(Json(response))
 }
 
 #[debug_handler]
@@ -69,7 +72,8 @@ pub async fn get_transaction_history(
     _headers: HeaderMap,
     Query(query): Query<TransactionHistoryQueryParams>,
     State(state): State<CommonState>,
-) -> Result<Json<PaginatedResponse<Vec<TransactionHistory>>>, ApiError> {
+) -> Result<Json<PaginatedResponse<Vec<TransactionHistoryResponse>>>, ApiError>
+{
     let page = query.page.unwrap_or(1);
 
     let (transactions, total_pages, total_items) = state
@@ -77,16 +81,51 @@ pub async fn get_transaction_history(
         .get_addresses_history(query.addresses, page)
         .await?;
 
-    let response =
-        PaginatedResponse::new(transactions, page, total_pages, total_items);
+    let response = transactions
+        .into_iter()
+        .map(TransactionHistoryResponse::from)
+        .collect();
 
-    Ok(Json(response))
+    Ok(Json(PaginatedResponse::new(
+        response,
+        page,
+        total_pages,
+        total_items,
+    )))
 }
 
-fn is_valid_hash(hash: &str) -> Result<(), TransactionError> {
-    if hash.len().eq(&64) {
-        Ok(())
-    } else {
-        Err(TransactionError::InvalidTxId)
-    }
+#[debug_handler]
+pub async fn get_most_recent_transactions(
+    _headers: HeaderMap,
+    Query(query): Query<TransactionMostRecentQueryParams>,
+    State(state): State<CommonState>,
+) -> Result<Json<Vec<WrapperTransactionResponse>>, ApiError> {
+    let size = query.size.unwrap_or(10);
+
+    let transactions = state
+        .transaction_service
+        .get_most_recent_transactions(size)
+        .await?;
+
+    let inner_txs = transactions
+        .iter()
+        .map(|tx| {
+            state
+                .transaction_service
+                .get_inner_tx_by_wrapper_id(tx.id.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    let inner_txs = futures::future::join_all(inner_txs).await;
+
+    let response = transactions
+        .into_iter()
+        .zip(inner_txs.into_iter())
+        .map(|(tx, inner_tx_result)| {
+            let inner_txs = inner_tx_result.unwrap_or_default();
+            WrapperTransactionResponse::new(tx, inner_txs)
+        })
+        .collect();
+
+    Ok(Json(response))
 }

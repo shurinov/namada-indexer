@@ -699,6 +699,7 @@ impl Block {
     pub fn addresses_with_balance_change(
         &self,
         native_token: &Id,
+        ibc_tokens: &[Token],
     ) -> HashSet<BalanceChange> {
         self.transactions
             .iter()
@@ -707,7 +708,11 @@ impl Block {
                     .iter()
                     .filter_map(|tx| {
                         if tx.was_successful(wrapper_tx) {
-                            self.process_inner_tx_for_balance(tx, native_token)
+                            self.process_inner_tx_for_balance(
+                                tx,
+                                native_token,
+                                ibc_tokens,
+                            )
                         } else {
                             None
                         }
@@ -729,7 +734,10 @@ impl Block {
                     {
                         balance_changes.push(BalanceChange::new(
                             Id::Account(block_proposer.to_owned()),
-                            Token::Native(wrapper_tx.fee.gas_token.clone()),
+                            Token::Ibc(IbcToken {
+                                address: wrapper_tx.fee.gas_token.clone(),
+                                trace: None,
+                            }),
                         ));
                     }
                 }
@@ -743,6 +751,7 @@ impl Block {
         &self,
         tx: &InnerTransaction,
         native_token: &Id,
+        ibc_tokens: &[Token],
     ) -> Option<Vec<BalanceChange>> {
         let change = match &tx.kind {
             TransactionKind::IbcMsg(Some(msg)) => {
@@ -757,13 +766,52 @@ impl Block {
                 vec![balance]
             }
             TransactionKind::IbcMsg(None) => Default::default(),
-
-            // Shielded transfers don't move any transparent balance
-            TransactionKind::ShieldedTransfer(_) => Default::default(),
+            // Shielded transfers don't move any transparent balance but we need
+            // to query the masp balance of all tokens
+            TransactionKind::ShieldedTransfer(_) => ibc_tokens
+                .iter()
+                .map(|token| {
+                    BalanceChange::new(
+                        Id::Account(MASP_ADDRESS.to_string()),
+                        token.clone(),
+                    )
+                })
+                .collect(),
             TransactionKind::ShieldingTransfer(data)
             | TransactionKind::UnshieldingTransfer(data)
-            | TransactionKind::MixedTransfer(data)
-            | TransactionKind::TransparentTransfer(data) => {
+            | TransactionKind::MixedTransfer(data) => {
+                let data = data.as_ref()?;
+
+                [&data.sources, &data.targets]
+                    .iter()
+                    .flat_map(|transfer_changes| {
+                        transfer_changes.0.keys().map(|account| {
+                            BalanceChange::new(
+                                Id::Account(account.owner()),
+                                Token::new(
+                                    &account.token(),
+                                    None,
+                                    &native_token.to_string(),
+                                ),
+                            )
+                        })
+                    })
+                    .flat_map(|bc| {
+                        [
+                            bc.clone(),
+                            BalanceChange::new(
+                                Id::Account(MASP_ADDRESS.to_string()),
+                                Token::new(
+                                    &bc.token.address().to_string(),
+                                    None,
+                                    &native_token.to_string(),
+                                ),
+                            ),
+                        ]
+                    })
+                    .collect()
+            }
+            TransactionKind::TransparentTransfer(data) => {
                 let data = data.as_ref()?;
 
                 [&data.sources, &data.targets]
@@ -782,8 +830,20 @@ impl Block {
                     })
                     .collect()
             }
-            TransactionKind::IbcTrasparentTransfer((token, data))
-            | TransactionKind::IbcShieldingTransfer((token, data))
+            TransactionKind::IbcTrasparentTransfer((token, data)) => {
+                [&data.sources, &data.targets]
+                    .iter()
+                    .flat_map(|transfer_changes| {
+                        transfer_changes.0.keys().map(|account| {
+                            BalanceChange::new(
+                                Id::Account(account.owner()),
+                                token.to_owned(),
+                            )
+                        })
+                    })
+                    .collect()
+            }
+            TransactionKind::IbcShieldingTransfer((token, data))
             | TransactionKind::IbcUnshieldingTransfer((token, data)) => {
                 [&data.sources, &data.targets]
                     .iter()
@@ -794,6 +854,19 @@ impl Block {
                                 token.to_owned(),
                             )
                         })
+                    })
+                    .flat_map(|bc| {
+                        [
+                            bc.clone(),
+                            BalanceChange::new(
+                                Id::Account(MASP_ADDRESS.to_string()),
+                                Token::new(
+                                    &bc.token.address().to_string(),
+                                    None,
+                                    &native_token.to_string(),
+                                ),
+                            ),
+                        ]
                     })
                     .collect()
             }

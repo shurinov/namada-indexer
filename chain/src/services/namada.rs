@@ -24,6 +24,7 @@ use shared::balance::{Amount, Balance, Balances, TokenSupply};
 use shared::block::{BlockHeight, Epoch};
 use shared::checksums::Checksums;
 use shared::id::Id;
+use shared::masp::MaspRewardData;
 use shared::pos::{
     Bond, BondAddresses, Bonds, Redelegation, Unbond, UnbondAddresses, Unbonds,
 };
@@ -260,12 +261,9 @@ async fn add_balance(
         &NamadaSdkAddress::from(token_addr),
     );
 
-    let balances = query_storage_prefix::<token::Amount>(
-        client,
-        &balance_prefix,
-        Some(height),
-    )
-    .await?;
+    let balances =
+        query_storage_prefix::<token::Amount>(client, &balance_prefix, None)
+            .await?;
 
     if let Some(balances) = balances {
         for (key, balance) in balances {
@@ -1107,6 +1105,30 @@ pub async fn get_validator_addresses_at_epoch(
     let validators = validator_set.into_iter().map(Id::from).collect();
 
     Ok(validators)
+}
+
+pub async fn get_masp_rates(
+    client: &HttpClient,
+) -> anyhow::Result<Vec<MaspRewardData>> {
+    let operation = || async {
+        let masp_rates = rpc::query_masp_reward_tokens(client)
+            .await
+            .context("Failed to query masp reward tokens")?;
+
+        let masp_rates = masp_rates.into_iter().map(|data| MaspRewardData {
+            address: Id::from(data.address),
+            max_reward_rate: data.max_reward_rate.to_string(),
+            kp_gain: data.kp_gain.to_string(),
+            kd_gain: data.kd_gain.to_string(),
+            locked_amount_target: Amount::from(NamadaSdkAmount::from(
+                data.locked_amount_target,
+            )),
+        });
+
+        Ok(masp_rates.collect())
+    };
+
+    default_retry(operation).await
 }
 
 fn to_epoch(epoch: u32) -> NamadaSdkEpoch {
